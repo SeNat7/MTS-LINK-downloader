@@ -9,6 +9,7 @@ from rich.traceback import install
 from time import sleep
 import json
 import certifi
+import re
 
 install(show_locals=True)
 
@@ -30,11 +31,12 @@ SKIP_MODULES = [
 ]
 
 
-def fetch_event_data(event_id):
+def fetch_event_data(event_id, token):
     params = {"withoutCuts": "false"}
     response = requests.get(
-        f"https://my.mts-link.ru/api/eventsessions/257884186/record?withoutCuts=false&recordAccessToken=ab87d25acad94efc94b9a30a19f91e0b",
-        params=params)
+        f"https://my.mts-link.ru/api/eventsessions/{event_id}/record?withoutCuts=false&recordAccessToken={token}",
+        params=params,
+    )
     data = response.json()
     return data
 
@@ -116,13 +118,21 @@ def process_event_logs(event_logs):
                 event["data"] = data
                 continue
             case "presentation.update":
-                reference = data["fileReference"]
-                file = reference["file"]
-                slide = reference["slide"]
-                event["data"] = {"file": slide["url"].split("/")[-1]}
-                files.append((file["name"], file["url"]))
-                chunks.append(slide["url"])
+                # Проверяем, существует ли ключ 'fileReference' в данных
+                if "fileReference" in data:
+                    reference = data["fileReference"]
+                    if "file" in reference and "slide" in reference:
+                        file = reference["file"]
+                        slide = reference["slide"]
+                        event["data"] = {"file": slide["url"].split("/")[-1]}
+                        files.append((file["name"], file["url"]))
+                        chunks.append(slide["url"])
+                    else:
+                        print("Ключи 'file' или 'slide' отсутствуют в 'fileReference'")
+                else:
+                    print("Ключ 'fileReference' отсутствует в data")
                 continue
+
             case _:
                 pass
     event_logs = sorted(event_logs, key=lambda x: x["time"], reverse=False)
@@ -142,16 +152,20 @@ async def download_file(path, url, client):
 async def main():
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-    # print(
-    #     "Введите ссылку вебинара (пример: https://events.webinar.ru/j/21390906/100137538/record-new/1122397272) Важно без слеша в конце. Вообще нужен просто последний год, можно и его ввести"
-    # )
-    # sleep(0.1)
-    #
-    # event_id = int(input("Ссылка: ").split("/")[-1])
-    # event_id = 1122397272
-    # event_id = 1794592932
-    event_id = os.getenv("event_id")
-    data = fetch_event_data(event_id)
+    print(
+        "Введите ссылку вебинара (пример: https://events.webinar.ru/j/21390906/100137538/record-new/1122397272) Важно без слеша в конце. Вообще нужен просто последний год, можно и его ввести"
+     )
+    sleep(0.1)
+
+    url1 = input("Ссылка: ")
+    # Ищем последовательность цифр после 'record-new/' и возможный хеш (он необязателен)
+    match = re.search(r'record-new/(\d+)(?:/([a-f0-9]{32}))?', url1)
+
+    if match:
+        event_id = match.group(1)  # Число 784023038
+        token = match.group(2)  # Хеш, если есть
+
+    data = fetch_event_data(event_id, token)
     event_logs = data["eventLogs"]
     name = data["name"]
     web_dir = f"{DOWNLOAD_DIR}/{name}"
